@@ -19,6 +19,13 @@ const ICON_BYTES: &[u8] = include_bytes!(
     "../res/icons/hicolor/scalable/apps/com.github.CharlesDupouy.CosmicAppletStickynotes.svg"
 );
 
+/// SVG for window resize grip handle in the bottom-right corner.
+const RESIZE_GRIP_SVG: &[u8] = br##"<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="#888888" stroke-width="1.5" stroke-linecap="round">
+  <line x1="14" y1="4" x2="4" y2="14" />
+  <line x1="14" y1="9" x2="9" y2="14" />
+  <line x1="14" y1="14" x2="14" y2="14" />
+</svg>"##;
+
 /// Application state.
 pub struct AppModel {
     /// Runtime core managed by libcosmic.
@@ -35,6 +42,10 @@ pub struct AppModel {
     show_new_note_input: bool,
     /// Whether the delete-confirmation dialog is shown.
     show_delete_confirm: bool,
+    /// Whether user is currently dragging the corner resize handle.
+    is_resizing: bool,
+    /// Last recorded cursor position during resize drag.
+    resize_last_pos: Option<cosmic::iced::Point>,
 }
 
 impl Default for AppModel {
@@ -51,6 +62,8 @@ impl Default for AppModel {
             new_note_name: String::new(),
             show_new_note_input: false,
             show_delete_confirm: false,
+            is_resizing: false,
+            resize_last_pos: None,
         }
     }
 }
@@ -82,6 +95,12 @@ pub enum Message {
     EditorAction(text_editor::Action),
     /// Debounced save: fired ~500ms after the last edit.
     SaveNotes,
+    /// User started dragging the bottom-right resize handle.
+    StartResize,
+    /// Mouse moved while dragging the resize handle.
+    ResizeMove(cosmic::iced::Point),
+    /// User released the mouse button, finishing the resize drag.
+    ResizeEnd,
 }
 
 impl cosmic::Application for AppModel {
@@ -115,6 +134,8 @@ impl cosmic::Application for AppModel {
             new_note_name: String::new(),
             show_new_note_input: false,
             show_delete_confirm: false,
+            is_resizing: false,
+            resize_last_pos: None,
         };
         (app, Task::none())
     }
@@ -127,6 +148,8 @@ impl cosmic::Application for AppModel {
         match message {
             // ── Popup ──────────────────────────────────────────────────────────
             Message::TogglePopup => {
+                self.is_resizing = false;
+                self.resize_last_pos = None;
                 return if let Some(popup_id) = self.popup.take() {
                     destroy_popup(popup_id)
                 } else {
@@ -135,13 +158,21 @@ impl cosmic::Application for AppModel {
                     // Reset transient UI state each time popup opens.
                     self.show_new_note_input = false;
                     self.show_delete_confirm = false;
-                    let popup_settings = self.core.applet.get_popup_settings(
+                    let mut popup_settings = self.core.applet.get_popup_settings(
                         self.core.main_window_id().unwrap(),
                         new_id,
-                        None,
+                        Some((
+                            self.store.popup_width.round() as u32,
+                            self.store.popup_height.round() as u32,
+                        )),
                         None,
                         None,
                     );
+                    popup_settings.positioner.size_limits = cosmic::iced::Limits::NONE
+                        .min_width(260.0)
+                        .max_width(1200.0)
+                        .min_height(200.0)
+                        .max_height(1200.0);
                     get_popup(popup_settings)
                 };
             }
@@ -149,6 +180,8 @@ impl cosmic::Application for AppModel {
             Message::PopupClosed(id) => {
                 if self.popup == Some(id) {
                     self.popup = None;
+                    self.is_resizing = false;
+                    self.resize_last_pos = None;
                 }
             }
 
@@ -249,6 +282,34 @@ impl cosmic::Application for AppModel {
 
             Message::SaveNotes => {
                 self.store.save();
+            }
+
+            // ── Resizing ──────────────────────────────────────────────────────
+            Message::StartResize => {
+                self.is_resizing = true;
+                self.resize_last_pos = None;
+            }
+
+            Message::ResizeMove(position) => {
+                if self.is_resizing {
+                    if let Some(last) = self.resize_last_pos {
+                        let dx = position.x - last.x;
+                        let dy = position.y - last.y;
+                        self.store.popup_width =
+                            (self.store.popup_width + dx).clamp(260.0, 1200.0);
+                        self.store.popup_height =
+                            (self.store.popup_height + dy).clamp(200.0, 1000.0);
+                    }
+                    self.resize_last_pos = Some(position);
+                }
+            }
+
+            Message::ResizeEnd => {
+                if self.is_resizing {
+                    self.is_resizing = false;
+                    self.resize_last_pos = None;
+                    self.store.save();
+                }
             }
         }
 
@@ -386,10 +447,23 @@ impl cosmic::Application for AppModel {
             None
         };
 
+        // Compute estimated content width based on the longest line in the note.
+        let max_line_len = self
+            .editor_content
+            .lines()
+            .map(|l| l.text.len())
+            .max()
+            .unwrap_or(0);
+        // Note width available inside the card (popup_width minus outer padding and card padding).
+        let note_inner_width = (self.store.popup_width - 48.0).max(200.0);
+        let editor_width = (max_line_len as f32 * 9.5 + 32.0).max(note_inner_width);
+
         // ── Text editor inside styled virtual sticky note ────────────────────
         let editor = widget::TextEditor::new(&self.editor_content)
             .on_action(Message::EditorAction)
+            .width(editor_width)
             .height(cosmic::iced::Length::Fill)
+            .wrapping(cosmic::iced::core::text::Wrapping::None)
             .padding(cosmic::iced::Padding::new(4.0))
             .style(move |_theme, _status| {
                 iced_text_editor::Style {
@@ -401,10 +475,12 @@ impl cosmic::Application for AppModel {
                 }
             });
 
+        let scrollable_editor = widget::scrollable::horizontal(editor);
+
         // The virtual sticky note box: thinner border, rounded corners, pastel background
-        let note_card = widget::container(editor)
-            .padding(12)
-            .height(230)
+        let note_card = widget::container(scrollable_editor)
+            .padding(10)
+            .height(cosmic::iced::Length::Fill)
             .width(cosmic::iced::Length::Fill)
             .style(move |_theme| {
                 container::Style {
@@ -427,8 +503,33 @@ impl cosmic::Application for AppModel {
 
         let editor_padded = cosmic::applet::padded_control(note_card);
 
+        // ── Resize handle grip in bottom-right corner ─────────────────────────
+        let grip_svg = cosmic::widget::svg(cosmic::iced::widget::svg::Handle::from_memory(
+            RESIZE_GRIP_SVG,
+        ))
+        .width(14)
+        .height(14);
+
+        let resize_grip = widget::mouse_area(
+            widget::container(grip_svg).padding(cosmic::iced::Padding {
+                top: 0.0,
+                bottom: 2.0,
+                left: 4.0,
+                right: 4.0,
+            }),
+        )
+        .interaction(cosmic::iced::mouse::Interaction::ResizingDiagonallyDown)
+        .on_press(Message::StartResize);
+
+        let footer_row = widget::row::with_capacity(2)
+            .push(widget::Space::new().width(cosmic::iced::Length::Fill))
+            .push(resize_grip)
+            .align_y(cosmic::iced::Alignment::Center);
+
+        let footer_padded = cosmic::applet::padded_control(footer_row);
+
         // ── Assemble content column ───────────────────────────────────────────
-        let mut content_col = widget::column::with_capacity(4)
+        let mut content_col = widget::column::with_capacity(5)
             .push(header_padded)
             .push(widget::divider::horizontal::default());
 
@@ -438,7 +539,11 @@ impl cosmic::Application for AppModel {
                 .push(widget::divider::horizontal::default());
         }
 
-        content_col = content_col.push(editor_padded);
+        content_col = content_col
+            .push(editor_padded)
+            .push(footer_padded)
+            .height(cosmic::iced::Length::Fill)
+            .width(cosmic::iced::Length::Fill);
 
         // ── Delete confirmation dialog overlay ────────────────────────────────
         let active_name = self
@@ -465,7 +570,21 @@ impl cosmic::Application for AppModel {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
-        Subscription::none()
+        if self.is_resizing {
+            cosmic::iced::event::listen_with(|event, _status, _window_id| match event {
+                cosmic::iced::Event::Mouse(
+                    cosmic::iced::mouse::Event::CursorMoved { position },
+                ) => Some(Message::ResizeMove(position)),
+                cosmic::iced::Event::Mouse(
+                    cosmic::iced::mouse::Event::ButtonReleased(
+                        cosmic::iced::mouse::Button::Left,
+                    ),
+                ) => Some(Message::ResizeEnd),
+                _ => None,
+            })
+        } else {
+            Subscription::none()
+        }
     }
 }
 
@@ -494,42 +613,46 @@ impl AppModel {
 
         cosmic::widget::autosize::autosize(
             widget::container(
-                widget::container(content).style(|theme| {
-                    let cosmic = theme.cosmic();
-                    let corners = cosmic.corner_radii;
-                    // Force transparent: false so the popup background is 100% opaque
-                    let bg = cosmic.background(false).base;
-                    let mut bg_color: cosmic::iced::Color = bg.into();
-                    bg_color.a = 1.0;
-                    container::Style {
-                        text_color: Some(cosmic.background(false).on.into()),
-                        background: Some(bg_color.into()),
-                        border: cosmic::iced::Border {
-                            radius: corners.radius_m.into(),
-                            width: 1.0,
-                            color: cosmic.background(false).divider.into(),
-                        },
-                        shadow: cosmic::iced::Shadow {
-                            color: cosmic::iced::Color::from_rgba(0.0, 0.0, 0.0, 0.3),
-                            offset: cosmic::iced::Vector::new(0.0, 4.0),
-                            blur_radius: 16.0,
-                        },
-                        icon_color: Some(cosmic.background(false).on.into()),
-                        snap: true,
-                    }
-                }),
+                widget::container(content)
+                    .width(self.store.popup_width)
+                    .height(self.store.popup_height)
+                    .style(|theme| {
+                        let cosmic = theme.cosmic();
+                        let corners = cosmic.corner_radii;
+                        // Force transparent: false so the popup background is 100% opaque
+                        let bg = cosmic.background(false).base;
+                        let mut bg_color: cosmic::iced::Color = bg.into();
+                        bg_color.a = 1.0;
+                        container::Style {
+                            text_color: Some(cosmic.background(false).on.into()),
+                            background: Some(bg_color.into()),
+                            border: cosmic::iced::Border {
+                                radius: corners.radius_m.into(),
+                                width: 1.0,
+                                color: cosmic.background(false).divider.into(),
+                            },
+                            shadow: cosmic::iced::Shadow {
+                                color: cosmic::iced::Color::from_rgba(0.0, 0.0, 0.0, 0.3),
+                                offset: cosmic::iced::Vector::new(0.0, 4.0),
+                                blur_radius: 16.0,
+                            },
+                            icon_color: Some(cosmic.background(false).on.into()),
+                            snap: true,
+                        }
+                    }),
             )
             .height(cosmic::iced::Length::Shrink)
+            .width(cosmic::iced::Length::Shrink)
             .align_x(horizontal_align)
             .align_y(vertical_align),
             cosmic::widget::Id::new("cosmic-applet-autosize"),
         )
         .limits(
             cosmic::iced::Limits::NONE
-                .min_height(1.)
-                .min_width(360.0)
-                .max_width(360.0)
-                .max_height(1000.0),
+                .min_height(200.0)
+                .min_width(260.0)
+                .max_width(1200.0)
+                .max_height(1200.0),
         )
     }
 }

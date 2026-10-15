@@ -98,6 +98,19 @@ impl StickyNote {
     }
 }
 
+/// Default width of the sticky note popup window.
+pub const DEFAULT_POPUP_WIDTH: f32 = 360.0;
+/// Default height of the sticky note popup window.
+pub const DEFAULT_POPUP_HEIGHT: f32 = 380.0;
+
+fn default_popup_width() -> f32 {
+    DEFAULT_POPUP_WIDTH
+}
+
+fn default_popup_height() -> f32 {
+    DEFAULT_POPUP_HEIGHT
+}
+
 /// Persisted application state (serialised to/from JSON).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotesStore {
@@ -107,6 +120,12 @@ pub struct NotesStore {
     pub active_index: usize,
     /// Monotonically increasing counter for assigning stable IDs.
     pub next_id: u64,
+    /// Saved popup window width.
+    #[serde(default = "default_popup_width")]
+    pub popup_width: f32,
+    /// Saved popup window height.
+    #[serde(default = "default_popup_height")]
+    pub popup_height: f32,
 }
 
 impl Default for NotesStore {
@@ -116,6 +135,8 @@ impl Default for NotesStore {
             notes: vec![first],
             active_index: 0,
             next_id: 2,
+            popup_width: DEFAULT_POPUP_WIDTH,
+            popup_height: DEFAULT_POPUP_HEIGHT,
         }
     }
 }
@@ -212,5 +233,23 @@ mod tests {
             note.content = "Updated content".to_string();
         }
         assert_eq!(store.active().unwrap().content, "Updated content");
+    }
+
+    #[test]
+    fn test_dimensions_and_backwards_compatibility() {
+        let store = NotesStore::default();
+        assert_eq!(store.popup_width, DEFAULT_POPUP_WIDTH);
+        assert_eq!(store.popup_height, DEFAULT_POPUP_HEIGHT);
+
+        // Deserializing legacy JSON without dimensions should fallback to defaults
+        let legacy_json = r#"{
+            "notes": [{"id": 1, "name": "Old Note", "content": "hello"}],
+            "active_index": 0,
+            "next_id": 2
+        }"#;
+        let loaded: NotesStore = serde_json::from_str(legacy_json).expect("Deserialization failed");
+        assert_eq!(loaded.popup_width, DEFAULT_POPUP_WIDTH);
+        assert_eq!(loaded.popup_height, DEFAULT_POPUP_HEIGHT);
+        assert_eq!(loaded.notes[0].color, NoteColor::Yellow);
     }
 }
