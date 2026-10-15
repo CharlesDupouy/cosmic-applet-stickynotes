@@ -1,0 +1,6 @@
+<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+  <!-- Note main body with dog-ear cutout and cutout lines (pure single-color symbolic icon) -->
+  <path fill-rule="evenodd" clip-rule="evenodd" d="M 3 1 C 1.9 1 1 1.9 1 3 L 1 13 C 1 14.1 1.9 15 3 15 L 9 15 L 15 9 L 15 3 C 15 1.9 14.1 1 13 1 L 3 1 Z M 3.5 4 C 3.2 4 3 4.2 3 4.5 C 3 4.8 3.2 5 3.5 5 L 10.5 5 C 10.8 5 11 4.8 11 4.5 C 11 4.2 10.8 4 10.5 4 L 3.5 4 Z M 3.5 7 C 3.2 7 3 7.2 3 7.5 C 3 7.8 3.2 8 3.5 8 L 9 8 C 9.3 8 9.5 7.8 9.5 7.5 C 9.5 7.2 9.3 7 9 7 L 3.5 7 Z M 3.5 10 C 3.2 10 3 10.2 3 10.5 C 3 10.8 3.2 11 3.5 11 L 7.5 11 C 7.8 11 8 10.8 8 10.5 C 8 10.2 7.8 10 7.5 10 L 3.5 10 Z" fill="currentColor"/>
+  <!-- Folded dog-ear flap in bottom-right corner -->
+  <path d="M 9.5 9.5 L 9.5 14.5 L 14.5 9.5 Z" fill="currentColor" fill-opacity="0.65"/>
+</svg>

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.github.CharlesDupouy.CosmicAppletStickynotes</id>
+  <name>Sticky Notes</name>
+  <summary>Virtual sticky notes for your COSMIC panel</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      A simple COSMIC panel applet that lets you keep virtual sticky notes
+      right in your desktop panel. Click the icon to open a popup where you
+      can create, switch between, and edit multiple named notes.
+      Notes are auto-saved and persist across reboots.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.github.CharlesDupouy.CosmicAppletStickynotes.desktop</launchable>
+  <url type="homepage">https://github.com/CharlesDupouy/cosmic-applet-stickynotes</url>
+</component>
