@@ -26,6 +26,14 @@ const RESIZE_GRIP_SVG: &[u8] = br##"<svg viewBox="0 0 16 16" xmlns="http://www.w
   <line x1="14" y1="14" x2="14" y2="14" />
 </svg>"##;
 
+/// Active drag state for resizing the popup window.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ResizeDrag {
+    pub start_width: f32,
+    pub start_height: f32,
+    pub start_cursor: Option<cosmic::iced::Point>,
+}
+
 /// Application state.
 pub struct AppModel {
     /// Runtime core managed by libcosmic.
@@ -42,10 +50,8 @@ pub struct AppModel {
     show_new_note_input: bool,
     /// Whether the delete-confirmation dialog is shown.
     show_delete_confirm: bool,
-    /// Whether user is currently dragging the corner resize handle.
-    is_resizing: bool,
-    /// Last recorded cursor position during resize drag.
-    resize_last_pos: Option<cosmic::iced::Point>,
+    /// Active drag state when user is resizing via the corner handle.
+    resize_drag: Option<ResizeDrag>,
 }
 
 impl Default for AppModel {
@@ -62,8 +68,7 @@ impl Default for AppModel {
             new_note_name: String::new(),
             show_new_note_input: false,
             show_delete_confirm: false,
-            is_resizing: false,
-            resize_last_pos: None,
+            resize_drag: None,
         }
     }
 }
@@ -101,6 +106,8 @@ pub enum Message {
     ResizeMove(cosmic::iced::Point),
     /// User released the mouse button, finishing the resize drag.
     ResizeEnd,
+    /// Preset popup size selected (width, height).
+    SetPopupSize(f32, f32),
 }
 
 impl cosmic::Application for AppModel {
@@ -134,8 +141,7 @@ impl cosmic::Application for AppModel {
             new_note_name: String::new(),
             show_new_note_input: false,
             show_delete_confirm: false,
-            is_resizing: false,
-            resize_last_pos: None,
+            resize_drag: None,
         };
         (app, Task::none())
     }
@@ -148,8 +154,7 @@ impl cosmic::Application for AppModel {
         match message {
             // ── Popup ──────────────────────────────────────────────────────────
             Message::TogglePopup => {
-                self.is_resizing = false;
-                self.resize_last_pos = None;
+                self.resize_drag = None;
                 return if let Some(popup_id) = self.popup.take() {
                     destroy_popup(popup_id)
                 } else {
@@ -180,8 +185,7 @@ impl cosmic::Application for AppModel {
             Message::PopupClosed(id) => {
                 if self.popup == Some(id) {
                     self.popup = None;
-                    self.is_resizing = false;
-                    self.resize_last_pos = None;
+                    self.resize_drag = None;
                 }
             }
 
@@ -286,30 +290,49 @@ impl cosmic::Application for AppModel {
 
             // ── Resizing ──────────────────────────────────────────────────────
             Message::StartResize => {
-                self.is_resizing = true;
-                self.resize_last_pos = None;
+                self.resize_drag = Some(ResizeDrag {
+                    start_width: self.store.popup_width,
+                    start_height: self.store.popup_height,
+                    start_cursor: None,
+                });
             }
 
             Message::ResizeMove(position) => {
-                if self.is_resizing {
-                    if let Some(last) = self.resize_last_pos {
-                        let dx = position.x - last.x;
-                        let dy = position.y - last.y;
-                        self.store.popup_width =
-                            (self.store.popup_width + dx).clamp(260.0, 1200.0);
-                        self.store.popup_height =
-                            (self.store.popup_height + dy).clamp(200.0, 1000.0);
-                    }
-                    self.resize_last_pos = Some(position);
+                if let Some(mut drag) = self.resize_drag {
+                    let start_cursor = match drag.start_cursor {
+                        Some(pos) => pos,
+                        None => {
+                            drag.start_cursor = Some(position);
+                            self.resize_drag = Some(drag);
+                            return Task::none();
+                        }
+                    };
+
+                    let (w, h) = calculate_resize(
+                        self.core.applet.anchor,
+                        drag.start_width,
+                        drag.start_height,
+                        start_cursor,
+                        self.store.popup_width,
+                        self.store.popup_height,
+                        position,
+                    );
+
+                    self.store.popup_width = w;
+                    self.store.popup_height = h;
                 }
             }
 
             Message::ResizeEnd => {
-                if self.is_resizing {
-                    self.is_resizing = false;
-                    self.resize_last_pos = None;
+                if self.resize_drag.take().is_some() {
                     self.store.save();
                 }
+            }
+
+            Message::SetPopupSize(width, height) => {
+                self.store.popup_width = width.clamp(260.0, 1000.0);
+                self.store.popup_height = height.clamp(200.0, 900.0);
+                self.store.save();
             }
         }
 
@@ -521,7 +544,27 @@ impl cosmic::Application for AppModel {
         .interaction(cosmic::iced::mouse::Interaction::ResizingDiagonallyDown)
         .on_press(Message::StartResize);
 
-        let footer_row = widget::row::with_capacity(2)
+        // ── Preset size buttons and resize handle ────────────────────────────
+        let btn_s = widget::button::standard("S")
+            .padding([2, 8])
+            .on_press(Message::SetPopupSize(340.0, 360.0));
+        let btn_m = widget::button::standard("M")
+            .padding([2, 8])
+            .on_press(Message::SetPopupSize(460.0, 460.0));
+        let btn_l = widget::button::standard("L")
+            .padding([2, 8])
+            .on_press(Message::SetPopupSize(600.0, 580.0));
+
+        let presets_row = widget::row::with_capacity(4)
+            .push(widget::text("Size:").size(12))
+            .push(btn_s)
+            .push(btn_m)
+            .push(btn_l)
+            .spacing(4)
+            .align_y(cosmic::iced::Alignment::Center);
+
+        let footer_row = widget::row::with_capacity(3)
+            .push(presets_row)
             .push(widget::Space::new().width(cosmic::iced::Length::Fill))
             .push(resize_grip)
             .align_y(cosmic::iced::Alignment::Center);
@@ -570,7 +613,7 @@ impl cosmic::Application for AppModel {
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
-        if self.is_resizing {
+        if self.resize_drag.is_some() {
             cosmic::iced::event::listen_with(|event, _status, _window_id| match event {
                 cosmic::iced::Event::Mouse(
                     cosmic::iced::mouse::Event::CursorMoved { position },
@@ -654,5 +697,138 @@ impl AppModel {
                 .max_width(1200.0)
                 .max_height(1200.0),
         )
+    }
+}
+
+/// Calculates stable, invariant window dimensions during a resize drag.
+///
+/// Because Wayland popups are anchored to the panel and centered horizontally,
+/// raw local mouse deltas between frames create runaway feedback loops when the window bounds
+/// adjust under the cursor. This function uses the fixed initial drag state to compute absolute
+/// cursor displacement on screen, ensuring 1:1 jitter-free cursor tracking.
+pub(crate) fn calculate_resize(
+    anchor: PanelAnchor,
+    start_width: f32,
+    start_height: f32,
+    start_pos: cosmic::iced::Point,
+    current_width: f32,
+    current_height: f32,
+    current_pos: cosmic::iced::Point,
+) -> (f32, f32) {
+    let (new_width, new_height) = match anchor {
+        PanelAnchor::Top => {
+            let offset_x = current_pos.x - current_width / 2.0;
+            let start_offset_x = start_pos.x - start_width / 2.0;
+            let delta_x = offset_x - start_offset_x;
+            let delta_y = current_pos.y - start_pos.y;
+            (start_width + 2.0 * delta_x, start_height + delta_y)
+        }
+        PanelAnchor::Bottom => {
+            let offset_x = current_pos.x - current_width / 2.0;
+            let start_offset_x = start_pos.x - start_width / 2.0;
+            let delta_x = offset_x - start_offset_x;
+            // On a bottom panel, dragging upward away from panel expands height
+            let dist_from_bottom = current_height - current_pos.y;
+            let start_dist_from_bottom = start_height - start_pos.y;
+            let delta_y = dist_from_bottom - start_dist_from_bottom;
+            (start_width + 2.0 * delta_x, start_height + delta_y)
+        }
+        PanelAnchor::Left => {
+            let delta_x = current_pos.x - start_pos.x;
+            let offset_y = current_pos.y - current_height / 2.0;
+            let start_offset_y = start_pos.y - start_height / 2.0;
+            let delta_y = offset_y - start_offset_y;
+            (start_width + delta_x, start_height + 2.0 * delta_y)
+        }
+        PanelAnchor::Right => {
+            let dist_from_right = current_width - current_pos.x;
+            let start_dist_from_right = start_width - start_pos.x;
+            let delta_x = dist_from_right - start_dist_from_right;
+            let offset_y = current_pos.y - current_height / 2.0;
+            let start_offset_y = start_pos.y - start_height / 2.0;
+            let delta_y = offset_y - start_offset_y;
+            (start_width + delta_x, start_height + 2.0 * delta_y)
+        }
+    };
+
+    (
+        new_width.round().clamp(260.0, 1000.0),
+        new_height.round().clamp(200.0, 900.0),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cosmic::iced::Point;
+
+    #[test]
+    fn test_calculate_resize_top_anchor_expansion() {
+        let start_pos = Point::new(355.0, 375.0);
+        // User moves mouse 20px right and 30px down
+        let current_pos = Point::new(375.0, 405.0);
+        let (w, h) = calculate_resize(
+            PanelAnchor::Top,
+            360.0,
+            380.0,
+            start_pos,
+            360.0,
+            380.0,
+            current_pos,
+        );
+        assert_eq!(w, 400.0);
+        assert_eq!(h, 410.0);
+    }
+
+    #[test]
+    fn test_calculate_resize_invariance_when_stationary() {
+        let start_pos = Point::new(355.0, 375.0);
+        // Window already expanded to 400x410.
+        // Left edge moved left by 20px, so stationary mouse in window coords is at (375+20 = 395, 405).
+        let stationary_pos = Point::new(395.0, 405.0);
+        let (w, h) = calculate_resize(
+            PanelAnchor::Top,
+            360.0,
+            380.0,
+            start_pos,
+            400.0,
+            410.0,
+            stationary_pos,
+        );
+        // Dimensions must stay stable with zero drift
+        assert_eq!(w, 400.0);
+        assert_eq!(h, 410.0);
+    }
+
+    #[test]
+    fn test_calculate_resize_clamping() {
+        let start_pos = Point::new(355.0, 375.0);
+        // Extreme shrinkage
+        let extreme_small = Point::new(0.0, 0.0);
+        let (w_min, h_min) = calculate_resize(
+            PanelAnchor::Top,
+            360.0,
+            380.0,
+            start_pos,
+            360.0,
+            380.0,
+            extreme_small,
+        );
+        assert_eq!(w_min, 260.0);
+        assert_eq!(h_min, 200.0);
+
+        // Extreme expansion
+        let extreme_large = Point::new(2000.0, 2000.0);
+        let (w_max, h_max) = calculate_resize(
+            PanelAnchor::Top,
+            360.0,
+            380.0,
+            start_pos,
+            360.0,
+            380.0,
+            extreme_large,
+        );
+        assert_eq!(w_max, 1000.0);
+        assert_eq!(h_max, 900.0);
     }
 }
