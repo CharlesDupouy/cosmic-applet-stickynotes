@@ -7,12 +7,17 @@ A virtual sticky notes panel applet for the [COSMIC™ desktop environment](http
 ## Overview & Usage
 
 - **Panel Applet**: Sits neatly in your COSMIC panel or dock with a dedicated sticky note icon.
-- **Quick Access**: Click to open a clean, 100% opaque popup note.
+- **Quick Access**: Click to open a popup note.
 - **Multiple Notes**: Create, name, switch between, and delete notes via the top dropdown bar.
+<<<<<<< HEAD
 - **Color Customization**: Choose from 6 pale pastel background colors (Butter Yellow, Mint, Powder Blue, Lavender, Rose, Peach) with high-contrast text.
 - **Horizontal & Vertical Scrolling**: Long lines can be scrolled smoothly to the right, ensuring wide text and code snippets never get clipped.
 - **Resizable Window**: Drag the bottom-right corner grip to resize the popup window to any size; your custom dimensions are automatically saved and remembered across sessions.
 - **Auto-Save & Persistence**: Notes and window size automatically save as you type and persist across reboots in `~/.config/cosmic-applet-stickynotes/notes.json`.
+=======
+- **Color Customization**: Choose from 6 pale pastel background colors
+- **Auto-Save & Persistence**: Notes automatically save as you type
+>>>>>>> refs/remotes/origin/main
 
 ---
 
